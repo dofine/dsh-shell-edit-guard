@@ -1,0 +1,19 @@
+# Applied when this package is listed in a profile's dsh.profile.bundles.
+#
+# `tools` is the profile-level registry every agent's calls pass through, so a
+# single root row covers every session, subagent, and PTC sub-dispatch in the
+# profile. `ctx.tools.guard` registers after the extensible `tools/pre-execute`
+# waterfall: any guard may refuse a call, and no other plugin can force-allow a
+# call this guard refused.
+#
+# `config:` is optional. Every field is validated at load, so a typo fails the
+# row loudly instead of guarding less than intended.
+- insert:
+    - id: shell-edit-guard
+      name: dsh-shell-edit-guard
+      # config:
+      #   tools: [bash, pwsh]
+      #   disabledRules: [tee]
+      #   allowPatterns: ['^git apply ']
+      #   extraPatterns: ['\bgsed -i\b']
+      #   requireEditorTool: true
