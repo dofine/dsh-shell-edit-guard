@@ -36,8 +36,10 @@ profile 消费 `plugins/` 下的包，与消费任何外部插件的方式相同
 ```sh
 cd /path/to/deepseek-harness
 pnpm run build
-pnpm dsh plugin --profile web add file:$PWD/plugins/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add link:$PWD/plugins/dsh-shell-edit-guard
 ```
+
+用 `link:` 而不是 `file:`：`file:` 会把包**拷贝**进 profile 的 `node_modules`，之后 `pnpm run build` 的产物永远到不了 profile；`link:` 始终指向这个目录。用链接后，改代码只需重新构建 + 重启。
 
 安装会把该插件记入 profile 的 `package.json`，并把 `dsh-shell-edit-guard` 加入 `dsh.profile.bundles`，其 `cordis.patch.yml` 负责插入这一行。之后重启 `dsh web`：插件模块在启动时加载一次，运行中的 host 会一直使用启动时的那份代码。
 

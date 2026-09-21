@@ -36,8 +36,10 @@ A profile consumes a `plugins/` package the same way it consumes any external pl
 ```sh
 cd /path/to/deepseek-harness
 pnpm run build
-pnpm dsh plugin --profile web add file:$PWD/plugins/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add link:$PWD/plugins/dsh-shell-edit-guard
 ```
+
+Use `link:`, not `file:`: `file:` copies the package into the profile's `node_modules`, so a later `pnpm run build` never reaches the profile, while `link:` keeps resolving this directory. With a link, a code change needs only a rebuild and a restart.
 
 The install records the plugin in the profile's `package.json` and adds `dsh-shell-edit-guard` to `dsh.profile.bundles`, whose `cordis.patch.yml` inserts the row. Restart `dsh web` afterwards: plugin modules load once at boot, so a running host keeps the code it started with.
 
