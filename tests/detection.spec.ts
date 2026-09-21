@@ -5,7 +5,17 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { DETECTION_RULES, detectShellFileEdit, isTempTarget, splitCommands, splitWords } from '../src/detection.ts'
+import {
+  DETECTION_RULES,
+  assignmentValue,
+  detectShellFileEdit,
+  isTempTarget,
+  maskQuoted,
+  redirectTargets,
+  splitCommands,
+  splitWords,
+  substitutionPayloads,
+} from '../src/detection.ts'
 import type { DetectionOptions, DetectionRuleId } from '../src/detection.ts'
 
 /** Compiled options with no pattern lists, for the built-in rules. */
@@ -49,10 +59,16 @@ describe('refused editing idioms', () => {
     ['truncate', 'truncate -s 0 src/file.ts', 'truncate'],
     ['truncate with no target', 'truncate', 'truncate'],
     ['python reading a heredoc without an inline flag', "python3 <<'PY'\nopen('src/file.ts','w').write('x')\nPY", 'inline-interpreter'],
+    ['Set-Content with a dotted target', "Set-Content -Path notes.md -Value 'x'", 'powershell-write'],
+    ['Set-Content with no path at all', "Set-Content -Value 'x'", 'powershell-write'],
     ['Set-Content', "Set-Content -Path src/file.ts -Value 'x'", 'powershell-write'],
     ['Out-File', 'Get-Content a | Out-File src/file.ts', 'powershell-write'],
     ['a later command in a chain', 'pnpm run build && sed -i "s/a/b/" src/file.ts', 'sed-in-place'],
     ['a continued command line', "sed \\\n  -i 's/a/b/' src/file.ts", 'sed-in-place'],
+    ['an editor inside a shell payload', `bash -c "sed -i 's/a/b/' src/file.ts"`, 'shell-inline'],
+    ['an editor one shell deeper', `sh -c 'bash -c "perl -pi -e s/a/b/ f.ts"'`, 'shell-inline'],
+    ['an editor inside a backtick substitution', "echo `sed -i 's/a/b/' src/file.ts`", 'shell-inline'],
+    ['an editor inside a command substitution', 'echo $(sed -i s/a/b/ src/file.ts)', 'shell-inline'],
   ]
 
   it.each(cases)('refuses %s', (_label, command, rule) => {
@@ -106,6 +122,13 @@ describe('allowed commands', () => {
     ['cargo', 'cargo build --release'],
     ['go generate', 'go generate ./...'],
     ['docker build', 'docker build -t app .'],
+    ['a SQL query whose comparison operators look like redirects', `psql -c "SELECT 1 WHERE dt >= '20260901' AND dt <= '20260920'"`],
+    ['the reported warehouse query', 'uv run ykdata mc-submit --sql "SELECT dt, COUNT(1) AS rows_cnt FROM t WHERE dt >= \'20260901\'" 2>&1 | tail -3'],
+    ['a quoted redirect-looking string', 'echo "a > b"'],
+    ['a quoted word that looks like an editor', `echo "sed -i 's/a/b/' src/file.ts"`],
+    ['a shell payload that edits nothing', 'bash -c "echo hello"'],
+    ['a backtick substitution that edits nothing', 'echo `date +%Y-%m-%d`'],
+    ['a comparison inside a backtick substitution', 'echo `printf "a > b"`'],
     ['an empty command', '   '],
   ]
 
@@ -181,5 +204,49 @@ describe('command splitting', () => {
     expect(isTempTarget('/dev/null')).toBe(true)
     expect(isTempTarget('${TMPDIR}/x')).toBe(true)
     expect(isTempTarget('src/file.ts')).toBe(false)
+  })
+})
+
+describe('shell-syntax readers', () => {
+  it('blanks quoted spans and keeps the command length', () => {
+    const command = `echo "a > b" 'c; d'`
+    const masked = maskQuoted(command)
+    expect(masked).toHaveLength(command.length)
+    expect(masked).not.toContain('>')
+    expect(masked).not.toContain('"')
+    expect(masked).not.toContain("'")
+    expect(maskQuoted(`echo 'unclosed`)).toBe('echo ' + ' '.repeat(9))
+  })
+
+  it('reads redirect targets a shell would act on', () => {
+    expect(redirectTargets('echo hi > out.txt')).toEqual(['out.txt'])
+    expect(redirectTargets('echo hi >> "a b.txt"')).toEqual(['a b.txt'])
+    expect(redirectTargets("echo hi >'a b.txt'")).toEqual(['a b.txt'])
+    expect(redirectTargets("psql -c \"SELECT 1 WHERE dt >= 'x'\"")).toEqual([])
+    // `>&2` duplicates a descriptor; the reader reports no file at all.
+    expect(redirectTargets('echo hi >&2')).toEqual([])
+    // A quoted target that never closes still names the file after the operator.
+    expect(redirectTargets('echo hi > "unclosed')).toEqual(['unclosed'])
+    expect(redirectTargets('echo hi >')).toEqual([])
+    expect(redirectTargets('echo "unclosed > out.txt')).toEqual([])
+  })
+
+  it('reads an assignment value with or without quotes', () => {
+    expect(assignmentValue('dd if=/dev/zero of=src/file.ts bs=1', 'of')).toBe('src/file.ts')
+    expect(assignmentValue('dd of="a b.bin" bs=1', 'of')).toBe('a b.bin')
+    expect(assignmentValue("dd of='a b.bin' bs=1", 'of')).toBe('a b.bin')
+    expect(assignmentValue('dd of="unclosed', 'of')).toBe('unclosed')
+    expect(assignmentValue('dd of= bs=1', 'of')).toBeUndefined()
+    expect(assignmentValue('dd if=/dev/zero bs=1', 'of')).toBeUndefined()
+    expect(assignmentValue('echo "of=x"', 'of')).toBeUndefined()
+  })
+
+  it('reads substitution payloads, including nested and unclosed ones', () => {
+    expect(substitutionPayloads('echo `date` $(pwd)')).toEqual(['date', 'pwd'])
+    expect(substitutionPayloads('echo "a" `b`')).toEqual(['b'])
+    expect(substitutionPayloads('echo `date')).toEqual(['date'])
+    expect(substitutionPayloads('echo $(echo $(date))')).toEqual(['echo $(date)'])
+    expect(substitutionPayloads('echo $(sed -i s/a/b/ f.ts')).toEqual(['sed -i s/a/b/ f.ts'])
+    expect(substitutionPayloads('echo nothing')).toEqual([])
   })
 })

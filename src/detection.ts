@@ -4,6 +4,13 @@
  * table is unit-testable without a registry and the plugin entry owns only
  * wiring and configuration.
  *
+ * Rules read the command the way a shell does. Quoted text is data, not syntax:
+ * a `>` inside a SQL string is a comparison, not a redirect, and `sed -i`
+ * inside a quoted argument is a word, not a program. Two consequences the rules
+ * keep explicit: a redirection's target may itself be quoted (`> "a b.txt"`),
+ * and a shell invoked as `<shell> -c "<text>"` really runs that text, so the
+ * payload is analyzed as its own command.
+ *
  * @module @deepseek-ai/dsh-shell-edit-guard/detection
  */
 
@@ -12,6 +19,7 @@ export const DETECTION_RULES = [
   'sed-in-place',
   'perl-in-place',
   'inline-interpreter',
+  'shell-inline',
   'redirect',
   'tee',
   'patch',
@@ -40,7 +48,7 @@ export interface DetectionOptions {
 export interface DetectionHit {
   /** Matched rule id. */
   readonly rule: RuleId
-  /** Whitespace-collapsed, length-capped excerpt of the offending simple command. */
+  /** Whitespace-collapsed, length-capped excerpt of the offending command. */
   readonly evidence: string
 }
 
@@ -69,6 +77,9 @@ const INLINE_FLAGS = new Set(['-c', '-e', '--eval', '-'])
 /** Interpreters that can execute model-authored code inside one shell command. */
 const INLINE_INTERPRETERS = ['python', 'python3', 'py', 'node', 'deno', 'bun', 'ruby', 'php']
 
+/** Shells whose `-c` payload is a command in its own right. */
+const SHELLS = ['sh', 'bash', 'zsh', 'dash', 'ksh']
+
 /** A heredoc whose body reaches the interpreter that reads it. */
 const HEREDOC = /<<-?\s*['"]?[A-Za-z_]/
 
@@ -78,20 +89,20 @@ const INLINE_WRITE = /\b(?:writeFileSync|writeFile|appendFileSync|appendFile|cre
 /** PowerShell cmdlets and .NET calls that write file content. */
 const POWERSHELL_WRITE = /(?:^|[\s;&|(])(?:set-content|add-content|out-file|clear-content|export-csv|new-item)\b|\[(?:system\.)?io\.file\]::writealltext/i
 
-/** A redirect whose target is a real file, capturing the target verbatim. */
-const REDIRECT = /(?:^|[^0-9&])>>?\s*(?:"([^"]+)"|'([^']+)'|([^\s;&|()<>]+))/g
-
-/** `dd of=<file>` writes the file it names. */
-const DD_OUTPUT = /(?:^|\s)of=(?:"([^"]+)"|'([^']+)'|([^\s;&|()]+))/
-
-/** A token that looks like a file path rather than an identifier or method call. */
+/** A token that looks like a file path rather than an identifier or an operator. */
 const PATH_TOKEN = /[^\s'"();,<>|&=]+/g
+
+/** A redirect target that could name a file, as opposed to an operator or descriptor. */
+const PATH_LIKE = /^(?![-=<>!&])[\w.~$@{}()[\]-][\w.~$@{}()[\]/.-]*$/
 
 /** Inline-code path literals with a file extension (`gen.py`, `out/x.ts`). */
 const EXTENSION_TOKEN = /^[\w.~-]+\.[A-Za-z0-9]{1,5}$/
 
 /** Cap on the quoted excerpt, so one flag cannot carry a whole script into the next request. */
 const EVIDENCE_CAP = 160
+
+/** How deep a shell's `-c` payload is followed before the rules stop descending. */
+const MAX_SHELL_DEPTH = 2
 
 /**
  * Split a command on unquoted separators, so each rule sees one simple command
@@ -159,6 +170,155 @@ export function splitWords(command: string): string[] {
 }
 
 /**
+ * Replace every quoted span with spaces, keeping the command's length and its
+ * quoting structure. Quoted text, including a backtick span, is data as far as
+ * the surrounding command's syntax goes, so syntax rules read this view and
+ * cannot mistake a comparison or a word for a redirect or a program.
+ *
+ * @param command - the raw shell command.
+ * @returns the same command with quoted and backtick spans blanked out.
+ */
+export function maskQuoted(command: string): string {
+  let masked = ''
+  let quote: string | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string
+    if (quote !== undefined) {
+      masked += ' '
+      if (char === quote && command[index - 1] !== '\\') quote = undefined
+      continue
+    }
+    // A backtick is a command substitution, but its body is also data as far as
+    // the surrounding command's syntax goes; `substitutionPayloads` reads it as
+    // a command in its own right.
+    if (char === '"' || char === "'" || char === '`') {
+      quote = char
+      masked += ' '
+      continue
+    }
+    masked += char
+  }
+  return masked
+}
+
+/**
+ * The command text inside every substitution: backtick spans and `$(…)` spans.
+ * A shell runs these, so an editor hidden there is still an editor.
+ *
+ * @param command - the raw shell command.
+ * @returns each substitution's inner text, in order.
+ */
+export function substitutionPayloads(command: string): string[] {
+  const payloads: string[] = []
+  let quote: string | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string
+    if (quote !== undefined) {
+      if (char === quote && command[index - 1] !== '\\') quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char === '`') {
+      const close = command.indexOf('`', index + 1)
+      const end = close === -1 ? command.length : close
+      payloads.push(command.slice(index + 1, end))
+      index = end
+      continue
+    }
+    if (char !== '$' || command[index + 1] !== '(') continue
+    let depth = 1
+    let end = index + 2
+    for (; end < command.length && depth > 0; end += 1) {
+      const inner = command[end] as string
+      if (inner === '(') depth += 1
+      else if (inner === ')') depth -= 1
+    }
+    payloads.push(command.slice(index + 2, depth === 0 ? end - 1 : command.length))
+    index = end - 1
+  }
+  return payloads
+}
+
+/**
+ * Every file a command redirects into, read the way a shell reads them: an
+ * unquoted `>` or `>>` starts the target, which may itself be quoted.
+ *
+ * @param command - one simple command.
+ * @returns the redirect targets, in order; quoting is stripped.
+ */
+export function redirectTargets(command: string): string[] {
+  const targets: string[] = []
+  let quote: string | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string
+    if (quote !== undefined) {
+      if (char === quote && command[index - 1] !== '\\') quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (char !== '>') continue
+    let at = index + 1
+    if (command[at] === '>') at += 1
+    index = at - 1
+    while (/\s/.test(command[at] ?? '')) at += 1
+    const opener = command[at]
+    if (opener === '"' || opener === "'") {
+      const close = command.indexOf(opener, at + 1)
+      const end = close === -1 ? command.length : close
+      targets.push(command.slice(at + 1, end))
+      index = end
+      continue
+    }
+    let end = at
+    while (end < command.length && !/[\s;&|()<>]/.test(command[end] as string)) end += 1
+    if (end > at) targets.push(command.slice(at, end))
+    index = end - 1
+  }
+  return targets
+}
+
+/**
+ * The value of an unquoted `name=` assignment, read the way a shell reads it:
+ * the value may be a bare word or a quoted one.
+ *
+ * @param command - the raw command.
+ * @param name - the assignment name, e.g. `of`.
+ * @returns the value without quotes, or undefined when the command sets none.
+ */
+export function assignmentValue(command: string, name: string): string | undefined {
+  let quote: string | undefined
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string
+    if (quote !== undefined) {
+      if (char === quote && command[index - 1] !== '\\') quote = undefined
+      continue
+    }
+    if (char === '"' || char === "'") {
+      quote = char
+      continue
+    }
+    if (!command.startsWith(`${name}=`, index)) continue
+    const at = index + name.length + 1
+    const opener = command[at]
+    if (opener === '"' || opener === "'") {
+      const close = command.indexOf(opener, at + 1)
+      const end = close === -1 ? command.length : close
+      return command.slice(at + 1, end)
+    }
+    let end = at
+    while (end < command.length && !/[\s;&|()<>]/.test(command[end] as string)) end += 1
+    return end > at ? command.slice(at, end) : undefined
+  }
+  return undefined
+}
+
+/**
  * Whether a write target is a temporary scratch path the guard tolerates.
  *
  * @param target - a file path or shell expansion a command would write.
@@ -204,16 +364,19 @@ function evidenceFor(command: string): string {
  * @param disabled - rule ids the configuration disabled.
  * @param full - the complete command, because a heredoc body reaches its
  *   interpreter in a later segment than the one naming that interpreter.
+ * @param depth - how many `-c` payloads enclose this command already.
  * @returns the matched rule and evidence, or undefined.
  */
 function matchCommand(
   command: string,
   disabled: ReadonlySet<DetectionRuleId>,
   full: string,
+  depth: number,
 ): DetectionHit | undefined {
-  const words = splitWords(command)
+  const syntax = maskQuoted(command)
+  const words = splitWords(syntax)
   const enabled = (rule: DetectionRuleId): boolean => !disabled.has(rule)
-  const hit = (rule: RuleId): DetectionHit => ({ rule, evidence: evidenceFor(command) })
+  const hit = (rule: DetectionRuleId): DetectionHit => ({ rule, evidence: evidenceFor(command) })
   const indexOf = (...names: string[]): number =>
     words.findIndex(word => names.includes(basename(word)))
   const inPlaceAfter = (index: number): boolean =>
@@ -243,12 +406,20 @@ function matchCommand(
       if (inline && INLINE_WRITE.test(full) && !writesOnlyTempPaths(full)) return hit('inline-interpreter')
     }
   }
+  if (enabled('shell-inline') && depth < MAX_SHELL_DEPTH) {
+    const payloads = indexOf(...SHELLS) >= 0
+      ? splitWords(command).filter(word => !word.startsWith('-') && (word.includes(' ') || /[;&|><]/.test(word)))
+      : []
+    for (const payload of [...payloads, ...substitutionPayloads(command)]) {
+      const nested = matchCommand(payload, disabled, payload, depth + 1)
+      if (nested !== undefined) return hit('shell-inline')
+    }
+  }
   if (enabled('patch') && (indexOf('patch') >= 0 || (indexOf('git') >= 0 && words.includes('apply')))) {
     return hit('patch')
   }
   if (enabled('dd') && indexOf('dd') >= 0) {
-    const output = DD_OUTPUT.exec(command)
-    const target = output === null ? undefined : output[1] ?? output[2] ?? output[3]
+    const target = assignmentValue(command, 'of')
     if (target !== undefined && !isTempTarget(target)) return hit('dd')
   }
   if (enabled('truncate')) {
@@ -258,18 +429,15 @@ function matchCommand(
       if (target === undefined || !isTempTarget(target)) return hit('truncate')
     }
   }
-  if (enabled('powershell-write') && POWERSHELL_WRITE.test(command)) {
+  if (enabled('powershell-write') && POWERSHELL_WRITE.test(syntax)) {
     const targets = words.filter((word, at) => at > 0 && !word.startsWith('-')
       && (word.includes('/') || EXTENSION_TOKEN.test(word)))
     if (targets.length === 0 || !targets.every(isTempTarget)) return hit('powershell-write')
   }
   if (enabled('redirect')) {
-    const redirect = new RegExp(REDIRECT.source, 'g')
-    let match = redirect.exec(command)
-    while (match !== null) {
-      const target = match[1] ?? match[2] ?? match[3]
-      if (target !== undefined && !target.startsWith('&') && !isTempTarget(target)) return hit('redirect')
-      match = redirect.exec(command)
+    for (const target of redirectTargets(command)) {
+      if (!PATH_LIKE.test(target)) continue
+      if (!isTempTarget(target)) return hit('redirect')
     }
   }
   if (enabled('tee')) {
@@ -304,7 +472,7 @@ export function detectShellFileEdit(
     if (options.extra.some(pattern => pattern.test(simple))) {
       return { rule: 'extra', evidence: evidenceFor(simple) }
     }
-    const match = matchCommand(simple, options.disabledRules, full)
+    const match = matchCommand(simple, options.disabledRules, full, 0)
     if (match !== undefined) return match
   }
   return undefined
