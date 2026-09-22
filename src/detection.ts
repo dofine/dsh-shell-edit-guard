@@ -62,6 +62,13 @@ const TEMP_MARKERS = [
   '/private/tmp/',
   '/var/tmp/',
   '/var/folders/',
+  // Repository-local scratch, the convention `/tmp/` follows on the host:
+  // projects gitignore `tmp/` and `.tmp/`, so capturing stderr or a log there
+  // (`… 2>tmp/stderr-check.txt`) is a diagnostic, not a hand edit. The trailing
+  // separator is what keeps a real source file such as `tmpfile.txt` out.
+  'tmp/',
+  './tmp/',
+  '.tmp/',
   '$TMPDIR',
   '${TMPDIR}',
   '$(mktemp',

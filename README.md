@@ -74,7 +74,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `powershell-write` | `Set-Content`, `Add-Content`, `Out-File`, `Clear-Content`, `Export-Csv`, `New-Item`, `[IO.File]::WriteAllText` |
 | `extra` | A deployment's own `extraPatterns` |
 
-Commands that write only to temporary paths (`/tmp/`, `$TMPDIR`, `mktemp`, `/dev/null`, `/dev/fd/*`, `/var/folders/`) stay allowed, as do read-only uses (`sed -n`, `perl -ne`, a `node -e` that only reads), project toolchains (`pnpm`/`npm`/`yarn`, builds, tests, formatters, `python3 scripts/gen.py`), git workflows, and queries that print rows — a `psql -c "SELECT … WHERE dt >= '20260901'"` compares inside a quoted string, which no shell reads as a redirect.
+Commands that write only to temporary paths (`/tmp/`, `$TMPDIR`, `mktemp`, `/dev/null`, `/dev/fd/*`, `/var/folders/`, or a repository-local scratch directory such as `tmp/` or `.tmp/`) stay allowed, as do read-only uses (`sed -n`, `perl -ne`, a `node -e` that only reads), project toolchains (`pnpm`/`npm`/`yarn`, builds, tests, formatters, `python3 scripts/gen.py`), git workflows, and queries that print rows — a `psql -c "SELECT … WHERE dt >= '20260901'"` compares inside a quoted string, which no shell reads as a redirect.
 
 <a id="the-judge"></a>
 ## The judge

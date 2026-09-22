@@ -74,7 +74,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `powershell-write` | `Set-Content`、`Add-Content`、`Out-File`、`Clear-Content`、`Export-Csv`、`New-Item`、`[IO.File]::WriteAllText` |
 | `extra` | 部署方自定义的 `extraPatterns` |
 
-只写临时路径的命令（`/tmp/`、`$TMPDIR`、`mktemp`、`/dev/null`、`/dev/fd/*`、`/var/folders/`）照常放行；只读用法（`sed -n`、`perl -ne`、仅读取的 `node -e`）、项目工具链（`pnpm`/`npm`/`yarn`、构建、测试、formatter、`python3 scripts/gen.py`）、git 工作流，以及打印结果的查询（例如 `psql -c "SELECT … WHERE dt >= '20260901'"`——比较运算符在引号内，shell 不会当成重定向）同样放行。
+只写临时路径的命令（`/tmp/`、`$TMPDIR`、`mktemp`、`/dev/null`、`/dev/fd/*`、`/var/folders/`，以及仓库内约定为临时的目录如 `tmp/`、`.tmp/`）照常放行；只读用法（`sed -n`、`perl -ne`、仅读取的 `node -e`）、项目工具链（`pnpm`/`npm`/`yarn`、构建、测试、formatter、`python3 scripts/gen.py`）、git 工作流，以及打印结果的查询（例如 `psql -c "SELECT … WHERE dt >= '20260901'"`——比较运算符在引号内，shell 不会当成重定向）同样放行。
 
 <a id="the-judge"></a>
 ## judge（Jev 判定）

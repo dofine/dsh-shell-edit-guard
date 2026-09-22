@@ -48,6 +48,8 @@ describe('refused editing idioms', () => {
     ['ruby -e writing', `ruby -e "File.write('src/file.ts', 'x')"`, 'inline-interpreter'],
     ['heredoc redirect', "cat > src/file.ts <<'EOF'\nhello\nEOF", 'redirect'],
     ['append redirect', 'printf "%s\\n" "line" >> src/file.ts', 'redirect'],
+    ['redirect into a file whose name only starts with tmp', 'pnpm run test > tmpfile.txt', 'redirect'],
+    ['redirect into a nested tmp directory', 'pnpm run test > src/tmp/t.log', 'redirect'],
     ['double-quoted redirect target', 'echo hi > "src/file.ts"', 'redirect'],
     ['tee into a source file', 'npx tsc --noEmit | tee build/report.txt', 'tee'],
     ['tee append', 'make 2>&1 | tee -a notes.md', 'tee'],
@@ -110,6 +112,11 @@ describe('allowed commands', () => {
     ['redirect to /dev/null', 'pnpm run test > /dev/null 2>&1'],
     ['redirect to a temp expansion', 'pnpm run build > "$TMPDIR/build.log" 2>&1'],
     ['redirect to /tmp', 'pnpm run test > /tmp/t.log 2>&1'],
+    ['stderr capture into a repository scratch dir', 'uv run ykdata mc-fetch 20260922082057652gu93ad54o1a --format json 2>tmp/stderr-check.txt'],
+    ['redirect into a repository scratch dir', 'pnpm run test > tmp/t.log 2>&1'],
+    ['redirect into a relative scratch dir', 'pnpm run build > ./tmp/build.log'],
+    ['redirect into a dot-scratch dir', 'pnpm run build > .tmp/build.log'],
+    ['tee into a repository scratch dir', 'pnpm run test | tee tmp/t.log'],
     ['tee to a temp file', 'pnpm run test | tee /tmp/t.log'],
     ['in-place edit of a scratch file', "sed -i 's/a/b/' /tmp/scratch.txt"],
     ['perl in-place edit of a scratch file', "perl -pi -e 's/a/b/' /tmp/scratch.txt"],
@@ -203,6 +210,11 @@ describe('command splitting', () => {
     expect(isTempTarget('/tmp/')).toBe(true)
     expect(isTempTarget('/dev/null')).toBe(true)
     expect(isTempTarget('${TMPDIR}/x')).toBe(true)
+    expect(isTempTarget('tmp/stderr-check.txt')).toBe(true)
+    expect(isTempTarget('./tmp/t.log')).toBe(true)
+    expect(isTempTarget('.tmp/build.log')).toBe(true)
+    expect(isTempTarget('tmpfile.txt')).toBe(false)
+    expect(isTempTarget('src/tmp/out.txt')).toBe(false)
     expect(isTempTarget('src/file.ts')).toBe(false)
   })
 })
