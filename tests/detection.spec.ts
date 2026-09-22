@@ -12,6 +12,7 @@ import {
   isTempTarget,
   maskQuoted,
   redirectTargets,
+  redirectWrites,
   splitCommands,
   splitWords,
   substitutionPayloads,
@@ -50,6 +51,9 @@ describe('refused editing idioms', () => {
     ['append redirect', 'printf "%s\\n" "line" >> src/file.ts', 'redirect'],
     ['redirect into a file whose name only starts with tmp', 'pnpm run test > tmpfile.txt', 'redirect'],
     ['redirect into a nested tmp directory', 'pnpm run test > src/tmp/t.log', 'redirect'],
+    ['redirect into a nested log directory', 'pnpm run test > src/logs/t.log', 'redirect'],
+    ['redirect into a report next to the sources', 'pnpm run test > report.txt', 'redirect'],
+    ['a redirect whose descriptor only looks like one', 'echo x2>out.log', 'redirect'],
     ['double-quoted redirect target', 'echo hi > "src/file.ts"', 'redirect'],
     ['tee into a source file', 'npx tsc --noEmit | tee build/report.txt', 'tee'],
     ['tee append', 'make 2>&1 | tee -a notes.md', 'tee'],
@@ -113,6 +117,12 @@ describe('allowed commands', () => {
     ['redirect to a temp expansion', 'pnpm run build > "$TMPDIR/build.log" 2>&1'],
     ['redirect to /tmp', 'pnpm run test > /tmp/t.log 2>&1'],
     ['stderr capture into a repository scratch dir', 'uv run ykdata mc-fetch 20260922082057652gu93ad54o1a --format json 2>tmp/stderr-check.txt'],
+    ['stderr capture into a log dir', 'uv run ykdata mc-fetch 20260922082057652gu93ad54o1a --format json 2>logs/stderr-check.txt'],
+    ['stderr append into a log file', 'pnpm run test 2>>logs/stderr.log'],
+    ['stdout capture into a log dir', 'pnpm run test > logs/test.log 2>&1'],
+    ['stdout capture into a dot-log dir', 'pnpm run build > .logs/build.log'],
+    ['stdlib capture into a relative log dir', 'pnpm run build > ./logs/build.log'],
+    ['stderr capture into a quoted path', 'pnpm run test 2>"logs/a b.log"'],
     ['redirect into a repository scratch dir', 'pnpm run test > tmp/t.log 2>&1'],
     ['redirect into a relative scratch dir', 'pnpm run build > ./tmp/build.log'],
     ['redirect into a dot-scratch dir', 'pnpm run build > .tmp/build.log'],
@@ -214,7 +224,10 @@ describe('command splitting', () => {
     expect(isTempTarget('./tmp/t.log')).toBe(true)
     expect(isTempTarget('.tmp/build.log')).toBe(true)
     expect(isTempTarget('tmpfile.txt')).toBe(false)
+    expect(isTempTarget('logs/test.log')).toBe(true)
+    expect(isTempTarget('./logs/test.log')).toBe(true)
     expect(isTempTarget('src/tmp/out.txt')).toBe(false)
+    expect(isTempTarget('src/logs/t.log')).toBe(false)
     expect(isTempTarget('src/file.ts')).toBe(false)
   })
 })
@@ -241,6 +254,24 @@ describe('shell-syntax readers', () => {
     expect(redirectTargets('echo hi > "unclosed')).toEqual(['unclosed'])
     expect(redirectTargets('echo hi >')).toEqual([])
     expect(redirectTargets('echo "unclosed > out.txt')).toEqual([])
+  })
+
+  it('reads which descriptor each redirect writes', () => {
+    expect(redirectWrites('run 2>err.log')).toEqual([{ descriptor: 2, target: 'err.log' }])
+    expect(redirectWrites('run 2>>err.log')).toEqual([{ descriptor: 2, target: 'err.log' }])
+    expect(redirectWrites('run 1>out.log >tail.log')).toEqual([
+      { descriptor: 1, target: 'out.log' },
+      { descriptor: 1, target: 'tail.log' },
+    ])
+    expect(redirectWrites('echo x2>out.log')).toEqual([{ descriptor: 1, target: 'out.log' }])
+    expect(redirectWrites('run 2>err.log >out.log')).toEqual([
+      { descriptor: 2, target: 'err.log' },
+      { descriptor: 1, target: 'out.log' },
+    ])
+    expect(redirectWrites('run 2>&1')).toEqual([])
+    // An IO number at the start of the command still stands alone as a word.
+    expect(redirectWrites('2>err.log')).toEqual([{ descriptor: 2, target: 'err.log' }])
+    expect(redirectWrites('2>>err.log; run')).toEqual([{ descriptor: 2, target: 'err.log' }])
   })
 
   it('reads an assignment value with or without quotes', () => {

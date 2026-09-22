@@ -62,13 +62,17 @@ const TEMP_MARKERS = [
   '/private/tmp/',
   '/var/tmp/',
   '/var/folders/',
-  // Repository-local scratch, the convention `/tmp/` follows on the host:
-  // projects gitignore `tmp/` and `.tmp/`, so capturing stderr or a log there
-  // (`… 2>tmp/stderr-check.txt`) is a diagnostic, not a hand edit. The trailing
+  // Repository-local scratch and output capture, the convention `/tmp/`
+  // follows on the host: projects gitignore `tmp/`, `.tmp/`, and `logs/`, so
+  // capturing stderr or a log there (`… 2>tmp/stderr-check.txt`,
+  // `… > logs/test.log`) is a diagnostic, not a hand edit. The trailing
   // separator is what keeps a real source file such as `tmpfile.txt` out.
   'tmp/',
   './tmp/',
   '.tmp/',
+  'logs/',
+  './logs/',
+  '.logs/',
   '$TMPDIR',
   '${TMPDIR}',
   '$(mktemp',
@@ -250,14 +254,28 @@ export function substitutionPayloads(command: string): string[] {
 }
 
 /**
+ * One file a shell opens for writing through a redirect, with the descriptor
+ * the shell redirects.
+ */
+export interface RedirectWrite {
+  /** File descriptor the shell redirected; 1 (stdout) when the command names none. */
+  readonly descriptor: 1 | 2
+  /** Target path, quoting stripped. */
+  readonly target: string
+}
+
+/**
  * Every file a command redirects into, read the way a shell reads them: an
- * unquoted `>` or `>>` starts the target, which may itself be quoted.
+ * unquoted `>` or `>>` starts the target, which may itself be quoted. A run of
+ * digits immediately before the operator is an IO number, and only counts as
+ * one when it stands alone as a word — `2>log` redirects descriptor 2, while
+ * `x2>log` redirects stdout.
  *
  * @param command - one simple command.
- * @returns the redirect targets, in order; quoting is stripped.
+ * @returns the writes, in order; quoting is stripped.
  */
-export function redirectTargets(command: string): string[] {
-  const targets: string[] = []
+export function redirectWrites(command: string): RedirectWrite[] {
+  const writes: RedirectWrite[] = []
   let quote: string | undefined
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] as string
@@ -270,6 +288,11 @@ export function redirectTargets(command: string): string[] {
       continue
     }
     if (char !== '>') continue
+    let digits = index
+    while (digits > 0 && /[0-9]/.test(command[digits - 1] as string)) digits -= 1
+    const beforeDigits = digits === 0 ? undefined : command[digits - 1]
+    const standaloneNumber = digits < index && (beforeDigits === undefined || /[\s;&|(]/.test(beforeDigits))
+    const descriptor: 1 | 2 = standaloneNumber && command.slice(digits, index) === '2' ? 2 : 1
     let at = index + 1
     if (command[at] === '>') at += 1
     index = at - 1
@@ -278,16 +301,26 @@ export function redirectTargets(command: string): string[] {
     if (opener === '"' || opener === "'") {
       const close = command.indexOf(opener, at + 1)
       const end = close === -1 ? command.length : close
-      targets.push(command.slice(at + 1, end))
+      writes.push({ descriptor, target: command.slice(at + 1, end) })
       index = end
       continue
     }
     let end = at
     while (end < command.length && !/[\s;&|()<>]/.test(command[end] as string)) end += 1
-    if (end > at) targets.push(command.slice(at, end))
+    if (end > at) writes.push({ descriptor, target: command.slice(at, end) })
     index = end - 1
   }
-  return targets
+  return writes
+}
+
+/**
+ * The redirect targets of one simple command.
+ *
+ * @param command - one simple command.
+ * @returns the target paths, in order; quoting is stripped.
+ */
+export function redirectTargets(command: string): string[] {
+  return redirectWrites(command).map(write => write.target)
 }
 
 /**
@@ -442,9 +475,12 @@ function matchCommand(
     if (targets.length === 0 || !targets.every(isTempTarget)) return hit('powershell-write')
   }
   if (enabled('redirect')) {
-    for (const target of redirectTargets(command)) {
-      if (!PATH_LIKE.test(target)) continue
-      if (!isTempTarget(target)) return hit('redirect')
+    for (const write of redirectWrites(command)) {
+      // Capturing stderr writes what a tool printed, never text the agent
+      // authored, so it is a diagnostic like `/tmp` output rather than an edit.
+      if (write.descriptor === 2) continue
+      if (!PATH_LIKE.test(write.target)) continue
+      if (!isTempTarget(write.target)) return hit('redirect')
     }
   }
   if (enabled('tee')) {

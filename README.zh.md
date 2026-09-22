@@ -66,7 +66,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `perl-in-place` | `perl -pi`、`perl -i` |
 | `inline-interpreter` | `python -c` / `python <<EOF` / `node -e` / `ruby -e` / `php -r` 且命令中出现写操作 |
 | `shell-inline` | `sh -c "…"` / `bash -c "…"`，其载荷命中上述任一写法 |
-| `redirect` | `>` / `>>` 写入非临时文件；按 shell 的读法解析（引号里的目标算文件，引号里的 `>` 不算重定向） |
+| `redirect` | `>` / `>>` 写入非临时文件；按 shell 的读法解析（引号里的目标算文件，引号里的 `>` 不算重定向；`2>` / `2>>` 写的是 stderr，属于捕获输出而不是写入模型指定的文本） |
 | `tee` | `tee <文件>`、`tee -a <文件>` |
 | `patch` | `patch -p1 < x.diff`、`git apply x.patch` |
 | `dd` | `dd of=<文件>` |
@@ -74,7 +74,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `powershell-write` | `Set-Content`、`Add-Content`、`Out-File`、`Clear-Content`、`Export-Csv`、`New-Item`、`[IO.File]::WriteAllText` |
 | `extra` | 部署方自定义的 `extraPatterns` |
 
-只写临时路径的命令（`/tmp/`、`$TMPDIR`、`mktemp`、`/dev/null`、`/dev/fd/*`、`/var/folders/`，以及仓库内约定为临时的目录如 `tmp/`、`.tmp/`）照常放行；只读用法（`sed -n`、`perl -ne`、仅读取的 `node -e`）、项目工具链（`pnpm`/`npm`/`yarn`、构建、测试、formatter、`python3 scripts/gen.py`）、git 工作流，以及打印结果的查询（例如 `psql -c "SELECT … WHERE dt >= '20260901'"`——比较运算符在引号内，shell 不会当成重定向）同样放行。
+只写临时路径的命令（`/tmp/`、`$TMPDIR`、`mktemp`、`/dev/null`、`/dev/fd/*`、`/var/folders/`，以及仓库内约定为临时或输出的目录如 `tmp/`、`.tmp/`、`logs/`）照常放行，把命令的 stderr 捕获到任意路径（`… 2>logs/run.log`）同样放行；只读用法（`sed -n`、`perl -ne`、仅读取的 `node -e`）、项目工具链（`pnpm`/`npm`/`yarn`、构建、测试、formatter、`python3 scripts/gen.py`）、git 工作流，以及打印结果的查询（例如 `psql -c "SELECT … WHERE dt >= '20260901'"`——比较运算符在引号内，shell 不会当成重定向）同样放行。
 
 <a id="the-judge"></a>
 ## judge（Jev 判定）
@@ -85,7 +85,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 |---|---|---|
 | ≥ `denyAt`（0.8） | `edit` | 拒绝，拒绝原因里带上模型名与概率 |
 | ≤ `allowAt`（0.2） | `read-only` | 放行，覆盖原先命中的规则 |
-| 中间带 | `unsure` | 走 `onUnsure`，默认沿用规则结论 |
+| 中间带 | `unsure` | 走 `onUnsure`，默认沿用规则结论；若部署方更愿意放过误报，设为 `allow`，这样连规则分不清是编辑还是输出的 stdout 捕获也会放行 |
 
 judge 挂在 `tools/pre-execute`（唯一能容纳异步判定的位置），再把结果按调用交给同步的 `ctx.tools.guard`。结论按命令文本缓存，同一条命令只花一次调用。judge 工具自身永不被检查，因此守卫不会递归进自己的 judge。
 

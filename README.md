@@ -66,7 +66,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `perl-in-place` | `perl -pi`, `perl -i` |
 | `inline-interpreter` | `python -c` / `python <<EOF` / `node -e` / `ruby -e` / `php -r` that also names a write |
 | `shell-inline` | `sh -c "…"` / `bash -c "…"` whose payload is one of these idioms |
-| `redirect` | `>` / `>>` into a non-temporary file, read the way a shell reads it (a quoted target counts; a `>` inside quotes does not) |
+| `redirect` | `>` / `>>` into a non-temporary file, read the way a shell reads it (a quoted target counts; a `>` inside quotes does not; `2>` / `2>>` names stderr, which captures output instead of writing text the model chose) |
 | `tee` | `tee <file>`, `tee -a <file>` |
 | `patch` | `patch -p1 < x.diff`, `git apply x.patch` |
 | `dd` | `dd of=<file>` |
@@ -74,7 +74,7 @@ pnpm dsh plugin --profile web add dsh-jev-decide
 | `powershell-write` | `Set-Content`, `Add-Content`, `Out-File`, `Clear-Content`, `Export-Csv`, `New-Item`, `[IO.File]::WriteAllText` |
 | `extra` | A deployment's own `extraPatterns` |
 
-Commands that write only to temporary paths (`/tmp/`, `$TMPDIR`, `mktemp`, `/dev/null`, `/dev/fd/*`, `/var/folders/`, or a repository-local scratch directory such as `tmp/` or `.tmp/`) stay allowed, as do read-only uses (`sed -n`, `perl -ne`, a `node -e` that only reads), project toolchains (`pnpm`/`npm`/`yarn`, builds, tests, formatters, `python3 scripts/gen.py`), git workflows, and queries that print rows — a `psql -c "SELECT … WHERE dt >= '20260901'"` compares inside a quoted string, which no shell reads as a redirect.
+Commands that write only to temporary paths (`/tmp/`, `$TMPDIR`, `mktemp`, `/dev/null`, `/dev/fd/*`, `/var/folders/`, or a repository-local scratch or output directory such as `tmp/`, `.tmp/`, or `logs/`) stay allowed, as does capturing a command's stderr anywhere (`… 2>logs/run.log`), as do read-only uses (`sed -n`, `perl -ne`, a `node -e` that only reads), project toolchains (`pnpm`/`npm`/`yarn`, builds, tests, formatters, `python3 scripts/gen.py`), git workflows, and queries that print rows — a `psql -c "SELECT … WHERE dt >= '20260901'"` compares inside a quoted string, which no shell reads as a redirect.
 
 <a id="the-judge"></a>
 ## The judge
@@ -85,7 +85,7 @@ When a command trips a rule, the guard asks one Noul question through the `jev_d
 |---|---|---|
 | ≥ `denyAt` (0.8) | `edit` | refused, with the model name and probability in the reason |
 | ≤ `allowAt` (0.2) | `read-only` | allowed, overriding the rule that flagged it |
-| in between | `unsure` | `onUnsure`, default: keep the rule verdict |
+| in between | `unsure` | `onUnsure`, default: keep the rule verdict; a deployment that would rather let a false positive through sets `allow`, which also passes stdout captures the rules cannot tell from an edit |
 
 The judge runs on `tools/pre-execute`, the only place an asynchronous decision can live, and hands its verdict to the synchronous `ctx.tools.guard` per call. A verdict is cached per command text, so a repeated command costs one call. The judge tool itself is never inspected, so the guard cannot recurse into its own judge.
 
