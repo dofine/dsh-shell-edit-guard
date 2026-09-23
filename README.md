@@ -37,7 +37,7 @@ A profile consumes this plugin the way it consumes any external plugin: install 
 pnpm dsh plugin --profile web add github:dofine/dsh-shell-edit-guard
 ```
 
-`prepare` compiles `lib/` with `tsc` during that install, so no separate build step is needed.
+`lib/` ships built in this repository, so the install runs no build step: pnpm refuses to run build scripts for Git-hosted packages by default. After editing `src/`, run `pnpm run build` and commit the result.
 
 To hack on the plugin, install a local checkout by link instead:
 

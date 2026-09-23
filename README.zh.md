@@ -37,7 +37,7 @@ profile 消费本插件，与消费任何外部插件的方式相同：装进 pr
 pnpm dsh plugin --profile web add github:dofine/dsh-shell-edit-guard
 ```
 
-安装过程由 `prepare` 用 `tsc` 编译出 `lib/`，无需额外的构建步骤。
+`lib/` 是随仓库提交的构建产物，因此安装过程不执行任何构建步骤：pnpm 默认拒绝对 Git 来源的包运行构建脚本。改动 `src/` 后请执行 `pnpm run build` 并把产物一并提交。
 
 要直接改代码，则改用链接方式安装本地检出：
 
