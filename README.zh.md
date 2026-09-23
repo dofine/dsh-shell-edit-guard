@@ -1,5 +1,5 @@
 ---
-description: "拒绝 shell 手工改文件的 fork 本地守卫：壳语法感知的规则 + Jev（System One）判定，让模型改用 write/edit 工具，从而保留文件系统版本守卫与先读后写策略"
+description: "拒绝 shell 手工改文件的守卫：壳语法感知的规则 + Jev（System One）判定，让模型改用 write/edit 工具，从而保留文件系统版本守卫与先读后写策略"
 kind: "package-reference"
 ---
 
@@ -9,13 +9,13 @@ kind: "package-reference"
 
 ## 摘要
 
-这个 fork 本地插件拒绝"用 shell 手工改文件"这类命令——`sed -i`、`perl -pi`、内联 `python`/`node` 脚本、heredoc、重定向、`tee`、`patch`、用 `sh -c`/`bash -c` 再套一层编辑器，以及对应的 PowerShell 写法——并明确告诉模型改用 `write`/`edit` 工具。这两个工具受文件系统版本守卫与先读后写策略保护；shell 编辑同时绕过两者，也不留下可审查的 diff，因此上下文一长就容易在毫无保护的情况下把文件改坏。
+这个插件拒绝"用 shell 手工改文件"这类命令——`sed -i`、`perl -pi`、内联 `python`/`node` 脚本、heredoc、重定向、`tee`、`patch`、用 `sh -c`/`bash -c` 再套一层编辑器，以及对应的 PowerShell 写法——并明确告诉模型改用 `write`/`edit` 工具。这两个工具受文件系统版本守卫与先读后写策略保护；shell 编辑同时绕过两者，也不留下可审查的 diff，因此上下文一长就容易在毫无保护的情况下把文件改坏。
 
 判定分两层。规则按 shell 的读法解析命令——**引号里的是数据而不是语法**，所以 SQL 字符串里的 `>` 比较不是重定向——清楚的情况零成本解决。当语法本身分不清"查询"与"手工修改"时，插件调用已挂载的 [`dsh-jev-decide`](https://github.com/deepseek-ai/deepseek-harness/discussions/7315) 工具，拿到校准过的 Noul 概率后按阈值判定。judge 是可选的：没有它、调用失败、超时，或概率落在中间带时，一律沿用规则结论。
 
 拒绝动作来自 `ctx.tools.guard`，它在可扩展的 `tools/pre-execute` 瀑布之后运行：任何守卫都可以拒绝调用，而没有任何插件能强制放行已被本守卫拒绝的调用。当该 agent 没有可用的 `write`/`edit` 工具时，守卫不做任何拦截，精简组合仍可正常使用 shell。
 
-`plugins/` 下的包永不发布：本 manifest 标记为 `private`，代码放在这里而不是 `packages/`——后者是仓库留给 release member 的位置。
+本 manifest 标记为 `private`，不会发布到 npm：profile 直接从本仓库的 Git 地址安装，安装过程中由 `prepare` 构建出 `lib/`。
 
 ## 目录
 
@@ -31,15 +31,22 @@ kind: "package-reference"
 <a id="use-this-plugin"></a>
 ## 使用
 
-profile 消费 `plugins/` 下的包，与消费任何外部插件的方式相同：装进 profile，之后让该行保持挂载。
+profile 消费本插件，与消费任何外部插件的方式相同：装进 profile，之后让该行保持挂载。
 
 ```sh
-cd /path/to/deepseek-harness
-pnpm run build
-pnpm dsh plugin --profile web add link:$PWD/plugins/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add github:dofine/dsh-shell-edit-guard
 ```
 
-用 `link:` 而不是 `file:`：`file:` 会把包**拷贝**进 profile 的 `node_modules`，之后 `pnpm run build` 的产物永远到不了 profile；`link:` 始终指向这个目录。用链接后，改代码只需重新构建 + 重启。
+安装过程由 `prepare` 用 `tsc` 编译出 `lib/`，无需额外的构建步骤。
+
+要直接改代码，则改用链接方式安装本地检出：
+
+```sh
+git clone https://github.com/dofine/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add link:$PWD/dsh-shell-edit-guard
+```
+
+用 `link:` 而不是 `file:`：`file:` 会把包**拷贝**进 profile 的 `node_modules`，之后再构建也到不了 profile；`link:` 始终指向该目录。用链接后，改代码只需 `pnpm run build` + 重启。
 
 安装会把该插件记入 profile 的 `package.json`，并把 `dsh-shell-edit-guard` 加入 `dsh.profile.bundles`，其 `cordis.patch.yml` 负责插入这一行。之后重启 `dsh web`：插件模块在启动时加载一次，运行中的 host 会一直使用启动时的那份代码。
 
@@ -120,10 +127,10 @@ judge 挂在 `tools/pre-execute`（唯一能容纳异步判定的位置），再
 ## 验证
 
 ```sh
-pnpm exec vitest run plugins/dsh-shell-edit-guard
+pnpm test
 ```
 
-测试覆盖每条规则、壳语法读取器（引号跨度、重定向目标、赋值）、临时路径豁免、两个正则列表、规则禁用分支、judge 阈值与缓存、对已注册 `jev_decide` fixture 的接线（放行、拒绝、失败、超时、中间带、缓存、`always` 模式、递归防护）、配置错误、守卫卸载，以及一个经 Loader 启动的 `cordis.yml` 组合。`pnpm run test:coverage` 对 `plugins/*/src` 采用与 `packages/*/*/src` 相同的 per-file 100% 门槛。
+测试覆盖每条规则、壳语法读取器（引号跨度、重定向目标、赋值）、临时路径豁免、两个正则列表、规则禁用分支、judge 阈值与缓存、对已注册 `jev_decide` fixture 的接线（放行、拒绝、失败、超时、中间带、缓存、`always` 模式、递归防护）、配置错误、守卫卸载，以及一个经 Loader 启动的 `cordis.yml` 组合。`pnpm test` 会先构建 `lib/`，因为插件级测试按包名导入本包。
 
 <a id="known-limitations-and-deferred-work"></a>
 ## 已知限制与待办

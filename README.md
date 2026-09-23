@@ -1,5 +1,5 @@
 ---
-description: "Fork-local guard that refuses shell commands editing files by hand: shell-aware rules plus a Jev (System One) verdict, so the model uses the write/edit tools and keeps the filesystem version guard and read-before-edit policy"
+description: "Guard that refuses shell commands editing files by hand: shell-aware rules plus a Jev (System One) verdict, so the model uses the write/edit tools and keeps the filesystem version guard and read-before-edit policy"
 kind: "package-reference"
 ---
 
@@ -9,13 +9,13 @@ English | [中文](README.zh.md)
 
 ## Summary
 
-This fork-local plugin refuses shell commands that edit files by hand — `sed -i`, `perl -pi`, inline `python`/`node` scripts, heredocs, redirection, `tee`, `patch`, a shell running one of those through `-c`, and their PowerShell equivalents — and tells the model to use the `write`/`edit` tools instead. Those tools enforce the filesystem version guard and the read-before-edit policy; shell edits bypass both and leave no reviewable diff, so a drifted long context can corrupt a file with no protection at all.
+This plugin refuses shell commands that edit files by hand — `sed -i`, `perl -pi`, inline `python`/`node` scripts, heredocs, redirection, `tee`, `patch`, a shell running one of those through `-c`, and their PowerShell equivalents — and tells the model to use the `write`/`edit` tools instead. Those tools enforce the filesystem version guard and the read-before-edit policy; shell edits bypass both and leave no reviewable diff, so a drifted long context can corrupt a file with no protection at all.
 
 Two layers decide. The rules read the command the way a shell does — quoted text is data, not syntax, so a `>` compared inside a SQL string is not a redirect — and settle the clear cases for free. Where shell syntax alone cannot tell a query from an edit, the plugin asks the mounted [`dsh-jev-decide`](https://github.com/deepseek-ai/deepseek-harness/discussions/7315) tool for a calibrated Noul probability and thresholds it. The judge is optional: without it, or when it fails, times out, or answers inside the configured band, the rule verdict stands.
 
 The refusal comes from `ctx.tools.guard`, which runs after the extensible `tools/pre-execute` waterfall: any guard may refuse a call, and no other plugin can force-allow one this guard refused. Nothing is refused while the agent has no `write`/`edit` tool to use, so a minimal composition keeps its shell.
 
-`plugins/` packages are never published: this manifest is `private`, and the code is versioned here rather than in `packages/`, which the repository reserves for release members.
+The manifest is `private`, so nothing reaches npm: a profile installs this package from its Git repository, and `prepare` builds `lib/` during that install.
 
 ## Table of Contents
 
@@ -31,15 +31,22 @@ The refusal comes from `ctx.tools.guard`, which runs after the extensible `tools
 <a id="use-this-plugin"></a>
 ## Use this plugin
 
-A profile consumes a `plugins/` package the same way it consumes any external plugin: install it into the profile, then leave the row mounted.
+A profile consumes this plugin the way it consumes any external plugin: install it into the profile, then leave the row mounted.
 
 ```sh
-cd /path/to/deepseek-harness
-pnpm run build
-pnpm dsh plugin --profile web add link:$PWD/plugins/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add github:dofine/dsh-shell-edit-guard
 ```
 
-Use `link:`, not `file:`: `file:` copies the package into the profile's `node_modules`, so a later `pnpm run build` never reaches the profile, while `link:` keeps resolving this directory. With a link, a code change needs only a rebuild and a restart.
+`prepare` compiles `lib/` with `tsc` during that install, so no separate build step is needed.
+
+To hack on the plugin, install a local checkout by link instead:
+
+```sh
+git clone https://github.com/dofine/dsh-shell-edit-guard
+pnpm dsh plugin --profile web add link:$PWD/dsh-shell-edit-guard
+```
+
+Use `link:`, not `file:`: `file:` copies the package into the profile's `node_modules`, so a later rebuild never reaches the profile, while `link:` keeps resolving that directory. With a link, a code change needs only `pnpm run build` and a restart.
 
 The install records the plugin in the profile's `package.json` and adds `dsh-shell-edit-guard` to `dsh.profile.bundles`, whose `cordis.patch.yml` inserts the row. Restart `dsh web` afterwards: plugin modules load once at boot, so a running host keeps the code it started with.
 
@@ -120,10 +127,10 @@ Both pattern lists are matched per simple command, so `allowPatterns: ['^git app
 ## Verification
 
 ```sh
-pnpm exec vitest run plugins/dsh-shell-edit-guard
+pnpm test
 ```
 
-The suite covers every rule, the shell-syntax readers (quoted spans, redirect targets, assignments), the temporary-path exemptions, both pattern lists, the disabled-rule arms, the judge thresholds and cache, the judge wiring against a registered `jev_decide` fixture (rescue, refusal, failure, timeout, band, cache, `always` mode, recursion), configuration failures, guard disposal, and a Loader-booted `cordis.yml` composition. `pnpm run test:coverage` holds `plugins/*/src` to the same per-file 100% bar as `packages/*/*/src`.
+The suite covers every rule, the shell-syntax readers (quoted spans, redirect targets, assignments), the temporary-path exemptions, both pattern lists, the disabled-rule arms, the judge thresholds and cache, the judge wiring against a registered `jev_decide` fixture (rescue, refusal, failure, timeout, band, cache, `always` mode, recursion), configuration failures, guard disposal, and a Loader-booted `cordis.yml` composition. `pnpm test` builds `lib/` first, because the plugin-level specs import the package by name.
 
 <a id="known-limitations-and-deferred-work"></a>
 ## Known Limitations and Deferred Work
