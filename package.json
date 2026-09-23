@@ -26,11 +26,11 @@
     }
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "workspace:^",
-    "@deepseek-ai/cordis-plugin-include": "workspace:^",
-    "@deepseek-ai/cordis-plugin-loader": "workspace:^",
-    "@deepseek-ai/dsh-llm": "workspace:^",
-    "@deepseek-ai/dsh-system-prompt": "workspace:^",
-    "@deepseek-ai/dsh-tools": "workspace:^"
+    "@deepseek-ai/cordis": "workspace:~",
+    "@deepseek-ai/cordis-plugin-include": "workspace:~",
+    "@deepseek-ai/cordis-plugin-loader": "workspace:~",
+    "@deepseek-ai/dsh-llm": "workspace:*",
+    "@deepseek-ai/dsh-system-prompt": "workspace:*",
+    "@deepseek-ai/dsh-tools": "workspace:*"
   }
 }
